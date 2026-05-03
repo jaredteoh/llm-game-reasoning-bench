@@ -6,15 +6,18 @@ from dataclasses import dataclass, field
 @dataclass
 class CompactionMetrics:
     """Metrics for evaluating compression effectiveness"""
+
     raw_tokens: int
     compressed_tokens: int
     compression_ratio: float
     strategic_signals_preserved: List[str] = field(default_factory=list)
-    
+
     def __str__(self):
-        return (f"Raw: {self.raw_tokens:,} tokens | "
-                f"Compressed: {self.compressed_tokens:,} tokens | "
-                f"Ratio: {self.compression_ratio:.1f}x")
+        return (
+            f"Raw: {self.raw_tokens:,} tokens | "
+            f"Compressed: {self.compressed_tokens:,} tokens | "
+            f"Ratio: {self.compression_ratio:.1f}x"
+        )
 
 
 class LoLMatchCompactor:
@@ -22,16 +25,16 @@ class LoLMatchCompactor:
     Compresses League of Legends match data from raw Riot API format
     into compact summaries suitable for LLM reasoning tasks.
     """
+
     EARLY_END = 14
     MID_END = 25
 
     STRATEGIC_EVENTS = {
-        'CHAMPION_KILL',
-        'BUILDING_KILL',
-        'ELITE_MONSTER_KILL',
-        'CHAMPION_SPECIAL_KILL',  # Multi-kills, ace, etc.
+        "CHAMPION_KILL",
+        "BUILDING_KILL",
+        "ELITE_MONSTER_KILL",
+        "CHAMPION_SPECIAL_KILL",  # Multi-kills, ace, etc.
     }
-
 
     def __init__(self):
         pass
@@ -143,15 +146,13 @@ class LoLMatchCompactor:
             summaries[phase] = self._aggregate_phase_stats(data["frames"], phase)
 
         return summaries
-    
+
     def _aggregate_phase_stats(
-        self,
-        frames: List[Dict[str, Any]],
-        phase: str
+        self, frames: List[Dict[str, Any]], phase: str
     ) -> Dict[str, Any]:
         """
         Aggregate frame data into phase-level macro statistics.
-        
+
         Preserves:
         - Gold state and trends
         - Experience advantages
@@ -163,99 +164,114 @@ class LoLMatchCompactor:
 
         first_frame = frames[0]
         last_frame = frames[-1]
-        
+
         def get_team_gold(frame, team_id):
             """Calculate total team gold from participant frames"""
-            participant_frames = frame.get('participantFrames', {})
+            participant_frames = frame.get("participantFrames", {})
+
+            # Participants 1-5 are team 100 (Blue)
+            # Participants 6-10 are team 200 (Red)
+            if team_id == 100:
+                participant_ids = ["1", "2", "3", "4", "5"]
+            else:  # team_id == 200
+                participant_ids = ["6", "7", "8", "9", "10"]
+
             return sum(
-                pf.get('totalGold', 0) 
-                for pid, pf in participant_frames.items()
-                if pf.get('teamId') == team_id
+                participant_frames.get(pid, {}).get("totalGold", 0)
+                for pid in participant_ids
             )
 
         blue_gold_start = get_team_gold(first_frame, 100)
         blue_gold_end = get_team_gold(last_frame, 100)
         red_gold_start = get_team_gold(first_frame, 200)
         red_gold_end = get_team_gold(last_frame, 200)
-        
+
         gold_diff_start = blue_gold_start - red_gold_start
         gold_diff_end = blue_gold_end - red_gold_end
         gold_swing = gold_diff_end - gold_diff_start
 
         return {
-            'phase': phase,
-            'gold_state': {
-                'blue_total': blue_gold_end,
-                'red_total': red_gold_end,
-                'difference': gold_diff_end,
-                'swing': gold_swing,  # How much gold diff changed during phase
+            "phase": phase,
+            "gold_state": {
+                "blue_total": blue_gold_end,
+                "red_total": red_gold_end,
+                "difference": gold_diff_end,
+                "swing": gold_swing,  # How much gold diff changed during phase
             },
-            'frame_count': len(frames),
+            "frame_count": len(frames),
         }
 
-    def _extract_strategic_events(self, timeline: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _extract_strategic_events(
+        self, timeline: Dict[str, Any]
+    ) -> List[Dict[str, Any]]:
         """
         Extract only strategically relevant events from timeline.
-        
+
         Filters out:
         - Individual skill usage
         - Minor item purchases
         - Ward placements (aggregate to vision score instead)
         - Detailed positioning data
         """
-        frames = timeline.get('info', {}).get('frames', [])
+        frames = timeline.get("info", {}).get("frames", [])
         strategic_events = []
-        
-        for frame in frames:
-            timestamp_min = frame.get('timestamp', 0) / 60000
 
-            for event in frame.get('events', []):
-                event_type = event.get('type')
+        for frame in frames:
+            timestamp_min = frame.get("timestamp", 0) / 60000
+
+            for event in frame.get("events", []):
+                event_type = event.get("type")
 
                 if event_type not in self.STRATEGIC_EVENTS:
                     continue
 
                 strategic_event = {
-                    'timestamp_min': round(timestamp_min, 1),
-                    'type': event_type,
+                    "timestamp_min": round(timestamp_min, 1),
+                    "type": event_type,
                 }
 
-                if event_type == 'CHAMPION_KILL':
-                    strategic_event.update({
-                        'victim': event.get('victimId'),
-                        'killer': event.get('killerId'),
-                        'assistants': event.get('assistingParticipantIds', []),
-                        'bounty': event.get('bounty', 0),
-                    })
-                    
-                elif event_type == 'BUILDING_KILL':
-                    strategic_event.update({
-                        'building_type': event.get('buildingType'),
-                        'lane': event.get('laneType'),
-                        'tower_tier': event.get('towerType'),
-                        'team_id': event.get('teamId'),
-                    })
-                    
-                elif event_type == 'ELITE_MONSTER_KILL':
-                    strategic_event.update({
-                        'monster_type': event.get('monsterType'),
-                        'monster_subtype': event.get('monsterSubType'),
-                        'killer_team_id': event.get('killerTeamId'),
-                    })
-                
+                if event_type == "CHAMPION_KILL":
+                    strategic_event.update(
+                        {
+                            "victim": event.get("victimId"),
+                            "killer": event.get("killerId"),
+                            "assistants": event.get("assistingParticipantIds", []),
+                            "bounty": event.get("bounty", 0),
+                        }
+                    )
+
+                elif event_type == "BUILDING_KILL":
+                    strategic_event.update(
+                        {
+                            "building_type": event.get("buildingType"),
+                            "lane": event.get("laneType"),
+                            "tower_tier": event.get("towerType"),
+                            "team_id": event.get("teamId"),
+                        }
+                    )
+
+                elif event_type == "ELITE_MONSTER_KILL":
+                    strategic_event.update(
+                        {
+                            "monster_type": event.get("monsterType"),
+                            "monster_subtype": event.get("monsterSubType"),
+                            "killer_team_id": event.get("killerTeamId"),
+                        }
+                    )
+
                 strategic_events.append(strategic_event)
-        
+
         return strategic_events
-    
+
     def _format_compact_summary(
         self,
         match_context: Dict[str, Any],
         phase_summaries: Dict[str, Dict[str, Any]],
-        strategic_events: List[Dict[str, Any]]
+        strategic_events: List[Dict[str, Any]],
     ) -> str:
         """
         Format extracted data into a compact, LLM-friendly text representation.
-        
+
         Uses structured natural language rather than raw JSON to:
         1. Reduce token count
         2. Improve LLM comprehension
@@ -268,10 +284,10 @@ class LoLMatchCompactor:
         lines.append(f"Patch: {match_context['game_version']}")
         lines.append("")
 
-        blue_champs = ", ".join(match_context['blue_team']['champions'])
-        red_champs = ", ".join(match_context['red_team']['champions'])
-        winner = "Blue" if match_context['blue_team']['win'] else "Red"
-        
+        blue_champs = ", ".join(match_context["blue_team"]["champions"])
+        red_champs = ", ".join(match_context["red_team"]["champions"])
+        winner = "Blue" if match_context["blue_team"]["win"] else "Red"
+
         lines.append(f"Blue Team: {blue_champs}")
         lines.append(f"Red Team: {red_champs}")
         lines.append(f"Winner: {winner} Team")
@@ -283,7 +299,7 @@ class LoLMatchCompactor:
                 continue
 
             summary = phase_summaries[phase]
-            gold_state = summary['gold_state']
+            gold_state = summary["gold_state"]
 
             lines.append(f"\n{phase.upper()} GAME:")
             lines.append(
@@ -294,32 +310,36 @@ class LoLMatchCompactor:
 
         lines.append("\n=== KEY EVENTS ===")
 
-        objective_kills = [e for e in strategic_events if e['type'] == 'ELITE_MONSTER_KILL']
-        building_kills = [e for e in strategic_events if e['type'] == 'BUILDING_KILL']
-        
+        objective_kills = [
+            e for e in strategic_events if e["type"] == "ELITE_MONSTER_KILL"
+        ]
+        building_kills = [e for e in strategic_events if e["type"] == "BUILDING_KILL"]
+
         if objective_kills:
             lines.append("\nObjectives:")
             for event in objective_kills:
-                timestamp = event['timestamp_min']
-                monster = event.get('monster_type', 'Unknown')
-                subtype = event.get('monster_subtype', '')
-                team = "Blue" if event.get('killer_team_id') == 100 else "Red"
-                
+                timestamp = event["timestamp_min"]
+                monster = event.get("monster_type", "Unknown")
+                subtype = event.get("monster_subtype", "")
+                team = "Blue" if event.get("killer_team_id") == 100 else "Red"
+
                 obj_name = f"{monster} {subtype}".strip()
                 lines.append(f"  {timestamp:>5.1f}m - {team} takes {obj_name}")
-        
+
         if building_kills:
             lines.append("\nStructures:")
             for event in building_kills:
-                timestamp = event['timestamp_min']
-                building = event.get('building_type', 'Building')
-                tier = event.get('tower_tier', '')
-                lane = event.get('lane', '')
-                team_destroyed = "Blue" if event.get('team_id') == 100 else "Red"
+                timestamp = event["timestamp_min"]
+                building = event.get("building_type", "Building")
+                tier = event.get("tower_tier", "")
+                lane = event.get("lane", "")
+                team_destroyed = "Blue" if event.get("team_id") == 100 else "Red"
                 team_attacker = "Red" if team_destroyed == "Blue" else "Blue"
-                
+
                 building_name = f"{tier} {building}".strip() if tier else building
-                location = f" ({lane})" if lane and lane != 'NONE' else ""
-                lines.append(f"  {timestamp:>5.1f}m - {team_attacker} destroys {team_destroyed}'s {building_name}{location}")
-        
+                location = f" ({lane})" if lane and lane != "NONE" else ""
+                lines.append(
+                    f"  {timestamp:>5.1f}m - {team_attacker} destroys {team_destroyed}'s {building_name}{location}"
+                )
+
         return "\n".join(lines)
