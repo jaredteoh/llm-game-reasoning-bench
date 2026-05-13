@@ -30,3 +30,6 @@ build/
 .pytest_cache/
 .coverage
 htmlcov/
+
+# Generated output
+output/
