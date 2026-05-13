@@ -2,8 +2,8 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from the same directory as this config file
-env_path = Path(__file__).parent / ".env"
+# Load .env from project root
+env_path = Path(__file__).parent.parent / ".env"
 load_dotenv(env_path)
 
 RIOT_API_KEY = os.getenv("RIOT_API_KEY")
