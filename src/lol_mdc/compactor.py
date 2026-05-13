@@ -91,23 +91,23 @@ class LoLMatchCompactor:
         info = match_details.get("info", {})
 
         participants = info.get("participants", [])
-        blue_team = [p for p in participants if p["teamId"] == 100]
-        red_team = [p for p in participants if p["teamId"] == 200]
+        blue_team = [p for p in participants if p.get("teamId") == 100]
+        red_team = [p for p in participants if p.get("teamId") == 200]
+
+        teams = info.get("teams", [])
+        blue_win = teams[0].get("win", False) if len(teams) > 0 else False
+        red_win = teams[1].get("win", False) if len(teams) > 1 else False
 
         context = {
             "game_duration_minutes": info.get("gameDuration", 0) // 60,
             "game_version": info.get("gameVersion", "unknown"),
             "blue_team": {
-                "champions": [p["championName"] for p in blue_team],
-                "win": info.get("teams", [{}])[0].get("win", False),
+                "champions": [p.get("championName", "Unknown") for p in blue_team],
+                "win": blue_win,
             },
             "red_team": {
-                "champions": [p["championName"] for p in red_team],
-                "win": (
-                    info.get("teams", [{}])[1].get("win", False)
-                    if len(info.get("teams", [])) > 1
-                    else False
-                ),
+                "champions": [p.get("championName", "Unknown") for p in red_team],
+                "win": red_win,
             },
         }
 
@@ -323,7 +323,16 @@ class LoLMatchCompactor:
                 subtype = event.get("monster_subtype", "")
                 team = "Blue" if event.get("killer_team_id") == 100 else "Red"
 
-                obj_name = f"{monster} {subtype}".strip()
+                # Skip HORDE events (Voidgrub mechanic - not strategically important)
+                if monster == "HORDE":
+                    continue
+
+                # Format name nicely
+                if subtype and subtype != "None":
+                    obj_name = f"{monster} {subtype}".strip()
+                else:
+                    obj_name = monster
+
                 lines.append(f"  {timestamp:>5.1f}m - {team} takes {obj_name}")
 
         if building_kills:
