@@ -17,6 +17,32 @@ from .task_schema import (
     GroundTruthConstraint,
 )
 
+MONSTER_NAMES = {
+    "BARON_NASHOR": "Baron",
+    "RIFTHERALD": "Rift Herald",
+    "DRAGON": "Dragon",
+    "WATER_DRAGON": "Ocean Drake",
+    "AIR_DRAGON": "Cloud Drake",
+    "FIRE_DRAGON": "Infernal Drake",
+    "EARTH_DRAGON": "Mountain Drake",
+    "ELDER_DRAGON": "Elder Dragon",
+    "CHEMTECH_DRAGON": "Chemtech Drake",
+    "HEXTECH_DRAGON": "Hextech Drake",
+    "HORDE": "Voidgrub",
+}
+
+LANE_NAMES = {
+    "TOP_LANE": "Top",
+    "MID_LANE": "Mid",
+    "BOT_LANE": "Bot",
+}
+
+def fmt_monster(raw: str) -> str:
+    return MONSTER_NAMES.get(raw, raw.replace("_", " ").title())
+
+def fmt_lane(raw: str) -> str:
+    return LANE_NAMES.get(raw, raw.replace("_", " ").title())
+
 
 class TaskTemplate:
     """Base class for task templates"""
@@ -73,8 +99,8 @@ class BaronContestTemplate(TaskTemplate):
         prompt = (
             f"{team} team is {gold_desc} at {timestamp:.1f} minutes. "
             f"Should they attempt Baron Nashor? "
-            f"Explain your strategic reasoning considering team compositions, "
-            f"gold state, vision control, and risks."
+            f"Based on the available game state, explain your strategic reasoning "
+            f"considering team compositions, gold state, vision control, and risks."
         )
 
         # Expected reasoning elements
@@ -92,6 +118,12 @@ class BaronContestTemplate(TaskTemplate):
                 importance="required",
             ),
             ReasoningElement(
+                element_id="team_composition",
+                name="Team Composition",
+                description="Considers how team compositions affect Baron attempt viability",
+                importance="expected",
+            ),
+            ReasoningElement(
                 element_id="vision_control",
                 name="Vision Control",
                 description="Mentions need for vision/control around Baron",
@@ -101,7 +133,7 @@ class BaronContestTemplate(TaskTemplate):
                 element_id="alternative_options",
                 name="Alternative Options",
                 description="Suggests alternatives to Baron (towers, dragons, etc.)",
-                importance="expected",
+                importance="required",
             ),
         ]
 
@@ -115,7 +147,38 @@ class BaronContestTemplate(TaskTemplate):
                     "keywords": ["vision", "control", "ward", "see", "sight"],
                     "min_mentions": 1,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="risk_reward_analysis",
+                constraint_type="must_mention",
+                description="Must discuss risk when evaluating the Baron attempt",
+                parameters={
+                    "keywords": ["risk", "risky", "dangerous", "danger", "safe", "unsafe", "chance"],
+                    "min_mentions": 1,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="mentions_gold_state",
+                constraint_type="must_mention",
+                description="Must reference gold state when evaluating Baron",
+                parameters={
+                    "keywords": ["gold", "ahead", "behind", "advantage", "disadvantage", "lead"],
+                    "min_mentions": 1,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="no_outnumbered_baron",
+                constraint_type="must_not_recommend",
+                description="Must not recommend starting Baron without full team",
+                parameters={
+                    "forbidden_recommendations": [
+                        "baron outnumbered",
+                        "start baron 4v5",
+                        "attempt baron without full team",
+                        "baron with missing",
+                    ]
+                },
+            ),
         ]
 
         # Add constraint for severe deficit (shouldn't recommend)
@@ -211,16 +274,12 @@ class ObjectiveTradeTemplate(TaskTemplate):
         red_gained = opportunity["red_gained"]
         phase = opportunity["phase"]
 
-        # Helper function to format objective names
         def format_objective(obj_name):
-            """Format objective names to be more readable"""
-            # Remove underscores and format nicely
+            if obj_name in MONSTER_NAMES:
+                return MONSTER_NAMES[obj_name]
             formatted = obj_name.replace("_", " ").title()
-
-            # Shorten common names
             formatted = formatted.replace("Tower Building", "Tower")
             formatted = formatted.replace("Inhibitor Building", "Inhibitor")
-
             return formatted
 
         def is_high_value(obj_list):
@@ -238,10 +297,22 @@ class ObjectiveTradeTemplate(TaskTemplate):
                 constraint_type="must_mention",
                 description="Must mention what both teams gained",
                 parameters={
-                    "must_include": ["blue", "red"],
-                    "context": "when evaluating trade",
+                    "keywords": ["blue", "red"],
+                    "min_mentions": 2,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="no_neutral_trade_assessment",
+                constraint_type="must_not_recommend",
+                description="Must not conclude the trade was completely neutral",
+                parameters={
+                    "forbidden_recommendations": [
+                        "neither team benefited",
+                        "neither side gained",
+                        "no advantage gained",
+                    ]
+                },
+            ),
         ]
 
         # Check trade balance
@@ -250,13 +321,21 @@ class ObjectiveTradeTemplate(TaskTemplate):
         blue_only_tower = is_low_value(blue_gained)
         red_only_tower = is_low_value(red_gained)
 
+        def get_high_value_name(obj_list):
+            """Return formatted name of the high-value objective in the list."""
+            for obj in obj_list:
+                if any(hv in obj for hv in ["BARON", "INHIBITOR", "ELDER"]):
+                    return format_objective(obj)
+            return "high-value objective"
+
         # Add critical constraint if trade is clearly one-sided
         if blue_has_baron and red_only_tower:
+            high_val = get_high_value_name(blue_gained)
             constraints.append(
                 GroundTruthConstraint(
-                    constraint_id="baron_vs_tower_critical",
+                    constraint_id="high_value_vs_tower_critical",
                     constraint_type="must_not_recommend",
-                    description="Must recognize Baron >> Tower",
+                    description=f"Must recognize {high_val} > Tower (Blue got the better trade)",
                     parameters={
                         "forbidden_recommendations": [
                             "red got better",
@@ -268,11 +347,12 @@ class ObjectiveTradeTemplate(TaskTemplate):
                 )
             )
         elif red_has_baron and blue_only_tower:
+            high_val = get_high_value_name(red_gained)
             constraints.append(
                 GroundTruthConstraint(
-                    constraint_id="baron_vs_tower_critical",
+                    constraint_id="high_value_vs_tower_critical",
                     constraint_type="must_not_recommend",
-                    description="Must recognize Baron >> Tower",
+                    description=f"Must recognize {high_val} > Tower (Red got the better trade)",
                     parameters={
                         "forbidden_recommendations": [
                             "blue got better",
@@ -306,13 +386,13 @@ class ObjectiveTradeTemplate(TaskTemplate):
                 element_id="map_control_impact",
                 name="Map Control Analysis",
                 description="Considers how trade affects map control",
-                importance="expected",
+                importance="required",
             ),
             ReasoningElement(
                 element_id="tempo_consideration",
                 name="Tempo Analysis",
                 description="Evaluates tempo/timing implications",
-                importance="optional",
+                importance="expected",
             ),
         ]
 
@@ -324,7 +404,7 @@ class ObjectiveTradeTemplate(TaskTemplate):
             compressed_match_state=compressed_match_state,
             match_id=match_id,
             game_phase=phase,
-            timestamp_min=float(timestamp),
+            timestamp_min=float(timestamp) + 1.0,
             expected_reasoning_elements=reasoning_elements,
             ground_truth_constraints=constraints,
             tags=["objective_trade", "strategic_planning", "resource_logic"],
@@ -359,7 +439,8 @@ class GoldSwingTemplate(TaskTemplate):
         prompt = (
             f"Between {phase_start} and {phase_end} game, there was a {swing:,} gold swing. "
             f"The gold difference went from {gold_start:+,} to {gold_end:+,}. "
-            f"What caused this reversal? Explain the causal chain of events."
+            f"Based on the available game events, what factors most likely contributed to this swing? "
+            f"Explain the causal chain of events."
         )
 
         reasoning_elements = [
@@ -379,7 +460,7 @@ class GoldSwingTemplate(TaskTemplate):
                 element_id="contributing_factors",
                 name="Contributing Factors",
                 description="Acknowledges secondary factors that amplified the swing",
-                importance="expected",
+                importance="required",
             ),
         ]
 
@@ -396,12 +477,29 @@ class GoldSwingTemplate(TaskTemplate):
                         "baron",
                         "tower",
                         "inhibitor",
-                        "ace",
                         "kill",
                     ],
                     "min_mentions": 2,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="references_timeline_events",
+                constraint_type="must_mention",
+                description="Must ground reasoning in specific events from the match timeline",
+                parameters={
+                    "keywords": [
+                        "minute",
+                        "min",
+                        "early game",
+                        "mid game",
+                        "late game",
+                        "took",
+                        "destroyed",
+                        "killed",
+                    ],
+                    "min_mentions": 2,
+                },
+            ),
         ]
 
         # Difficulty based on swing size
@@ -458,8 +556,8 @@ class SnowballEffectTemplate(TaskTemplate):
         prompt = (
             f"{team} team had a {early_lead:,} gold lead at {start_time}, "
             f"which grew to {mid_lead:,} gold by {end_time}. "
-            f"Trace the causal chain that allowed this {amplification:,} gold "
-            f"amplification. How did the initial advantage compound?"
+            f"Based on the available game events, what factors most likely allowed this {amplification:,} gold "
+            f"amplification? How did the initial advantage compound?"
         )
 
         reasoning_elements = [
@@ -477,9 +575,9 @@ class SnowballEffectTemplate(TaskTemplate):
             ),
             ReasoningElement(
                 element_id="causal_steps",
-                name="Step-by-Step Causation",
-                description="Traces the specific sequence: A caused B, which enabled C, etc.",
-                importance="required",
+                name="Timeline Grounding",
+                description="Grounds the causal chain in specific events from the match timeline (e.g. references actual kills, objectives, or structures taken)",
+                importance="expected",
             ),
             ReasoningElement(
                 element_id="enemy_response",
@@ -522,6 +620,24 @@ class SnowballEffectTemplate(TaskTemplate):
                         "which",
                         "snowball",
                         "compound",
+                    ],
+                    "min_mentions": 2,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="references_timeline_events",
+                constraint_type="must_mention",
+                description="Must ground reasoning in specific events from the match timeline",
+                parameters={
+                    "keywords": [
+                        "minute",
+                        "min",
+                        "early game",
+                        "mid game",
+                        "late game",
+                        "took",
+                        "destroyed",
+                        "killed",
                     ],
                     "min_mentions": 2,
                 },
@@ -584,7 +700,7 @@ class ComebackMechanicTemplate(TaskTemplate):
         prompt = (
             f"{team} team was {initial_deficit:,} gold behind at {start_time}, "
             f"but recovered to {final_desc} by {end_time}. "
-            f"What sequence of events enabled this {recovery:,} gold recovery? "
+            f"Based on the available game events, what factors most likely enabled this {recovery:,} gold recovery? "
             f"Trace the causal factors that turned the game around."
         )
 
@@ -627,9 +743,9 @@ class ComebackMechanicTemplate(TaskTemplate):
                         "baron",
                         "dragon",
                         "tower",
-                        "ace",
                         "shutdown",
                         "bounty",
+                        "kill",
                     ],
                     "min_mentions": 2,
                 },
@@ -647,6 +763,24 @@ class ComebackMechanicTemplate(TaskTemplate):
                         "then",
                         "caused",
                         "resulted in",
+                    ],
+                    "min_mentions": 2,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="references_timeline_events",
+                constraint_type="must_mention",
+                description="Must ground reasoning in specific events from the match timeline",
+                parameters={
+                    "keywords": [
+                        "minute",
+                        "min",
+                        "early game",
+                        "mid game",
+                        "late game",
+                        "took",
+                        "destroyed",
+                        "killed",
                     ],
                     "min_mentions": 2,
                 },
@@ -693,8 +827,8 @@ class BadBaronTemplate(TaskTemplate):
         prompt = (
             f"{team} team attempted Baron at {timestamp:.1f} minutes while "
             f"{gold_deficit:,} gold behind. "
-            f"Identify the strategic error in this decision and explain what "
-            f"they should have done instead."
+            f"Evaluate whether this Baron attempt was strategically sound given the game state. "
+            f"If it was a mistake, explain why and what they should have done instead."
         )
 
         reasoning_elements = [
@@ -714,7 +848,7 @@ class BadBaronTemplate(TaskTemplate):
                 element_id="severity_assessment",
                 name="Error Severity",
                 description="Assesses how critical this mistake was",
-                importance="expected",
+                importance="required",
             ),
         ]
 
@@ -724,7 +858,7 @@ class BadBaronTemplate(TaskTemplate):
                 constraint_type="must_not_recommend",
                 description="Must not defend the Baron attempt as correct",
                 parameters={
-                    "forbidden_statements": [
+                    "forbidden_recommendations": [
                         "was the right call",
                         "good decision",
                         "correct play",
@@ -738,6 +872,22 @@ class BadBaronTemplate(TaskTemplate):
                 description="Must acknowledge the gold deficit as a factor",
                 parameters={
                     "keywords": ["behind", "deficit", "disadvantage", "gold"],
+                    "min_mentions": 1,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="proposes_alternative",
+                constraint_type="must_mention",
+                description="Must propose what the team should have done instead",
+                parameters={
+                    "keywords": [
+                        "instead",
+                        "should have",
+                        "alternative",
+                        "better",
+                        "could have",
+                        "recommend",
+                    ],
                     "min_mentions": 1,
                 },
             ),
@@ -777,7 +927,7 @@ class BadTeamfightTemplate(TaskTemplate):
         deficit = opportunity["resulting_deficit"]
 
         prompt = (
-            f"During {phase} game, {team} team lost {abs(gold_swing):,} gold advantage, "
+            f"During {phase} game, there was a {abs(gold_swing):,} gold swing against {team} team, "
             f"resulting in a {deficit:,} gold deficit. "
             f"Diagnose what strategic error likely occurred. "
             f"What should they have done differently to avoid this outcome?"
@@ -820,7 +970,38 @@ class BadTeamfightTemplate(TaskTemplate):
                     ],
                     "min_mentions": 1,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="proposes_alternative",
+                constraint_type="must_mention",
+                description="Must propose what the team should have done instead",
+                parameters={
+                    "keywords": [
+                        "instead",
+                        "should have",
+                        "alternative",
+                        "better",
+                        "could have",
+                        "recommend",
+                    ],
+                    "min_mentions": 1,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="recognizes_as_mistake",
+                constraint_type="must_not_recommend",
+                description="Must not frame the strategic error as a correct decision",
+                parameters={
+                    "forbidden_recommendations": [
+                        "correct decision",
+                        "right play",
+                        "good strategy",
+                        "no mistake",
+                        "was correct",
+                        "played correctly",
+                    ]
+                },
+            ),
         ]
 
         task = ReasoningTask(
@@ -889,7 +1070,7 @@ class OverextensionTemplate(TaskTemplate):
                 element_id="prevention_strategy",
                 name="Prevention Strategy",
                 description="Suggests how to avoid similar mistakes (vision, communication, etc.)",
-                importance="expected",
+                importance="required",
             ),
         ]
 
@@ -909,7 +1090,38 @@ class OverextensionTemplate(TaskTemplate):
                     ],
                     "min_mentions": 1,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="proposes_alternative",
+                constraint_type="must_mention",
+                description="Must propose what the team should have done instead",
+                parameters={
+                    "keywords": [
+                        "instead",
+                        "should have",
+                        "alternative",
+                        "better",
+                        "could have",
+                        "recommend",
+                    ],
+                    "min_mentions": 1,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="recognizes_as_mistake",
+                constraint_type="must_not_recommend",
+                description="Must not frame the overextension as a correct decision",
+                parameters={
+                    "forbidden_recommendations": [
+                        "correct decision",
+                        "right play",
+                        "good strategy",
+                        "no mistake",
+                        "was correct",
+                        "played correctly",
+                    ]
+                },
+            ),
         ]
 
         task = ReasoningTask(
@@ -944,7 +1156,7 @@ class MissedObjectiveTemplate(TaskTemplate):
         actual_team = opportunity["actual_team"]
         timestamp = opportunity["timestamp"]
         phase = opportunity["phase"]
-        objective = opportunity["objective"]
+        objective = fmt_monster(opportunity["objective"])
         gold_advantage = opportunity["gold_advantage"]
 
         prompt = (
@@ -991,7 +1203,22 @@ class MissedObjectiveTemplate(TaskTemplate):
                     ],
                     "min_mentions": 1,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="recognizes_as_mistake",
+                constraint_type="must_not_recommend",
+                description="Must not frame the missed objective as a correct decision",
+                parameters={
+                    "forbidden_recommendations": [
+                        "correct decision",
+                        "right play",
+                        "good strategy",
+                        "no mistake",
+                        "was correct",
+                        "played correctly",
+                    ]
+                },
+            ),
         ]
 
         task = ReasoningTask(
@@ -1029,7 +1256,7 @@ class FirstDrakeContestTemplate(TaskTemplate):
 
         team = opportunity["team"]
         timestamp = opportunity["timestamp"]
-        drake_type = opportunity["drake_type"]
+        drake_type = fmt_monster(opportunity["drake_type"])
         gold_diff = opportunity["gold_diff"]
         phase = opportunity["phase"]
 
@@ -1037,11 +1264,17 @@ class FirstDrakeContestTemplate(TaskTemplate):
         prompt = (
             f"At {timestamp:.1f} minutes, the first dragon ({drake_type}) spawns. "
             f"Should {team} team prioritize contesting this dragon? "
-            f"Consider the early game gold state, vision control, lane priority, "
+            f"Based on the available game state, consider the gold state, vision control, "
             f"and trade-offs with other objectives."
         )
 
         reasoning_elements = [
+            ReasoningElement(
+                element_id="drake_type_value",
+                name="Drake Type Valuation",
+                description="Considers the specific drake type's buff value when deciding whether to contest",
+                importance="required",
+            ),
             ReasoningElement(
                 element_id="early_priority",
                 name="Early Priority Assessment",
@@ -1052,13 +1285,13 @@ class FirstDrakeContestTemplate(TaskTemplate):
                 element_id="lane_state",
                 name="Lane State Analysis",
                 description="Considers which lanes have priority for rotation",
-                importance="required",
+                importance="expected",
             ),
             ReasoningElement(
                 element_id="vision_setup",
                 name="Vision Setup",
                 description="Discusses vision control needed for drake contest",
-                importance="expected",
+                importance="required",
             ),
         ]
 
@@ -1125,13 +1358,13 @@ class SplitPushTemplate(TaskTemplate):
     ) -> ReasoningTask:
 
         timestamp = opportunity["timestamp"]
-        lanes = opportunity["lanes_pressured"]
+        lanes = [fmt_lane(l) for l in opportunity["lanes_pressured"]]
         phase = opportunity["phase"]
 
         prompt = (
-            f"Around {timestamp} minutes, there is pressure in {len(lanes)} different lanes "
+            f"Around {timestamp} minutes, structures were taken across {len(lanes)} different lanes "
             f"({', '.join(lanes)}). "
-            f"Analyze the map positioning and explain which team has better macro control. "
+            f"Based on the available game state, explain which team has better macro control. "
             f"Should the defending team group to contest or match the split push?"
         )
 
@@ -1152,7 +1385,7 @@ class SplitPushTemplate(TaskTemplate):
                 element_id="threat_prioritization",
                 name="Threat Prioritization",
                 description="Identifies which lane threat is most critical",
-                importance="expected",
+                importance="required",
             ),
         ]
 
@@ -1219,9 +1452,9 @@ class MapControlTemplate(TaskTemplate):
         phase = opportunity["phase"]
 
         prompt = (
-            f"{controlling_team} team has established map control across all three lanes "
+            f"{controlling_team} team has secured structures across all three lanes "
             f"by {timestamp:.1f} minutes. "
-            f"Analyze the spatial advantages this provides and explain how the losing team "
+            f"Based on the available game state, analyze the macro advantages this provides and explain how the losing team "
             f"should approach regaining map presence."
         )
 
@@ -1322,7 +1555,7 @@ class PowerSpikeTemplate(TaskTemplate):
                 element_id="opponent_scaling",
                 name="Opponent Scaling Consideration",
                 description="Considers enemy team's scaling and power spikes",
-                importance="expected",
+                importance="required",
             ),
         ]
 
@@ -1335,7 +1568,36 @@ class PowerSpikeTemplate(TaskTemplate):
                     "keywords": ["item", "gold", "power", "spike", "scale", "damage"],
                     "min_mentions": 2,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="makes_clear_recommendation",
+                constraint_type="must_mention",
+                description="Must commit to a clear recommendation rather than hedging",
+                parameters={
+                    "keywords": [
+                        "should",
+                        "recommend",
+                        "prioritize",
+                        "better to",
+                        "focus on",
+                        "avoid",
+                    ],
+                    "min_mentions": 1,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="no_both_options_hedge",
+                constraint_type="must_not_recommend",
+                description="Must not conclude both options are equally valid",
+                parameters={
+                    "forbidden_recommendations": [
+                        "both options are equally valid",
+                        "either approach works",
+                        "both are viable",
+                        "it depends entirely on preference",
+                    ]
+                },
+            ),
         ]
 
         task = ReasoningTask(
@@ -1346,6 +1608,7 @@ class PowerSpikeTemplate(TaskTemplate):
             compressed_match_state=compressed_match_state,
             match_id=match_id,
             game_phase=phase,
+            timestamp_min=float(opportunity["timestamp"]),
             expected_reasoning_elements=reasoning_elements,
             ground_truth_constraints=constraints,
             tags=["resource_logic", "power_spike", "timing"],
@@ -1391,6 +1654,12 @@ class ScalingDecisionTemplate(TaskTemplate):
                 importance="required",
             ),
             ReasoningElement(
+                element_id="opponent_scaling",
+                name="Opponent Scaling Consideration",
+                description="Considers whether the enemy team outscales if given more time",
+                importance="required",
+            ),
+            ReasoningElement(
                 element_id="timing_windows",
                 name="Timing Windows",
                 description="Identifies when team needs to act vs. when they can delay",
@@ -1407,7 +1676,36 @@ class ScalingDecisionTemplate(TaskTemplate):
                     "keywords": ["scale", "scaling", "late", "time", "farm", "delay"],
                     "min_mentions": 1,
                 },
-            )
+            ),
+            GroundTruthConstraint(
+                constraint_id="makes_clear_recommendation",
+                constraint_type="must_mention",
+                description="Must commit to a clear recommendation rather than hedging",
+                parameters={
+                    "keywords": [
+                        "should",
+                        "recommend",
+                        "prioritize",
+                        "better to",
+                        "focus on",
+                        "avoid",
+                    ],
+                    "min_mentions": 1,
+                },
+            ),
+            GroundTruthConstraint(
+                constraint_id="no_both_options_hedge",
+                constraint_type="must_not_recommend",
+                description="Must not conclude both options are equally valid",
+                parameters={
+                    "forbidden_recommendations": [
+                        "both options are equally valid",
+                        "either approach works",
+                        "both are viable",
+                        "it depends entirely on preference",
+                    ]
+                },
+            ),
         ]
 
         task = ReasoningTask(
@@ -1418,6 +1716,7 @@ class ScalingDecisionTemplate(TaskTemplate):
             compressed_match_state=compressed_match_state,
             match_id=match_id,
             game_phase=phase,
+            timestamp_min=float(opportunity["timestamp"]),
             expected_reasoning_elements=reasoning_elements,
             ground_truth_constraints=constraints,
             tags=["resource_logic", "scaling", "deficit_management"],

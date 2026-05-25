@@ -131,13 +131,22 @@ class ObjectiveTradeDetector(PatternDetector):
         for window, window_events in time_windows.items():
             blue_objectives = []
             red_objectives = []
+            blue_horde = 0
+            red_horde = 0
 
             for event in window_events:
                 event_type = event.get("type")
 
                 if event_type == "ELITE_MONSTER_KILL":
-                    team = "Blue" if event.get("killer_team_id") == 100 else "Red"
                     obj_type = event.get("monster_type", "objective")
+                    team = "Blue" if event.get("killer_team_id") == 100 else "Red"
+
+                    if obj_type == "HORDE":
+                        if team == "Blue":
+                            blue_horde += 1
+                        else:
+                            red_horde += 1
+                        continue
 
                     if team == "Blue":
                         blue_objectives.append(obj_type)
@@ -153,6 +162,11 @@ class ObjectiveTradeDetector(PatternDetector):
                         blue_objectives.append(building_type)
                     else:
                         red_objectives.append(building_type)
+
+            if blue_horde > 0:
+                blue_objectives.append(f"{blue_horde} Voidgrub{'s' if blue_horde > 1 else ''}")
+            if red_horde > 0:
+                red_objectives.append(f"{red_horde} Voidgrub{'s' if red_horde > 1 else ''}")
 
             # Pattern: Both teams got something significant = trade scenario
             if blue_objectives and red_objectives:
@@ -790,6 +804,9 @@ class MapControlDisparityDetector(PatternDetector):
 # ============================================================================
 
 
+_PHASE_TIMESTAMPS = {"early": 10.0, "mid": 20.0, "late": 30.0}
+
+
 class PowerSpikeTimingDetector(PatternDetector):
     """
     Detect power spike moments based on gold thresholds and objectives.
@@ -836,7 +853,7 @@ class PowerSpikeTimingDetector(PatternDetector):
                         opportunities.append(
                             {
                                 "pattern_type": "power_spike_timing",
-                                "timestamp": None,  # Phase-based
+                                "timestamp": _PHASE_TIMESTAMPS.get(phase_name, 20.0),
                                 "phase": phase_name,
                                 "team": "Blue",
                                 "team_gold": blue_gold,
@@ -854,7 +871,7 @@ class PowerSpikeTimingDetector(PatternDetector):
                         opportunities.append(
                             {
                                 "pattern_type": "power_spike_timing",
-                                "timestamp": None,
+                                "timestamp": _PHASE_TIMESTAMPS.get(phase_name, 20.0),
                                 "phase": phase_name,
                                 "team": "Red",
                                 "team_gold": red_gold,
@@ -982,7 +999,7 @@ class BadTeamfightDetector(PatternDetector):
                                 "team": "Blue",
                                 "gold_swing": swing,
                                 "resulting_deficit": abs(gold_diff_end),
-                                "timestamp": None,  # Phase-based
+                                "timestamp": _PHASE_TIMESTAMPS.get(phase_name, 20.0),
                             }
                         )
 
