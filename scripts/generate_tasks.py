@@ -21,9 +21,13 @@ from config import RIOT_API_KEY, RIOT_REGION
 from task_generation import (
     ReasoningTask,
     TaskDataset,
+    ReasoningType,
     detect_all_patterns,
     get_template,
 )
+from filter_temporal_leakage import filter_match_state_until_timestamp
+
+_RETROSPECTIVE_TYPES = {ReasoningType.CAUSAL_INFERENCE, ReasoningType.ERROR_DIAGNOSIS}
 
 
 class TaskGenerator:
@@ -96,6 +100,13 @@ class TaskGenerator:
                         compressed_match_state=compressed_text,
                         match_id=match_id,
                     )
+                    if (
+                        task.reasoning_type not in _RETROSPECTIVE_TYPES
+                        and task.timestamp_min is not None
+                    ):
+                        task.compressed_match_state = filter_match_state_until_timestamp(
+                            task.compressed_match_state, task.timestamp_min
+                        )
                     tasks.append(task)
                 except Exception as e:
                     print(f"  Warning: {pattern_type} - {e}")
