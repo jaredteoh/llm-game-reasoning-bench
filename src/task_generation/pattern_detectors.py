@@ -806,6 +806,13 @@ class MapControlDisparityDetector(PatternDetector):
 
 _PHASE_TIMESTAMPS = {"early": 10.0, "mid": 20.0, "late": 30.0}
 
+# Phase-end timestamps: prospective tasks need the timestamp set to AFTER the phase
+# completes so the temporal filter shows that phase's gold data in the match state.
+# EARLY GAME visible at >=14.0, MID GAME visible at >=25.0.
+# Late game is never visible (PHASE_COMPLETE_AT = inf), so late-phase tasks use
+# timestamp=25.0 (mid-phase end) and reference mid-phase gold in the prompt.
+_PHASE_END_TIMESTAMPS = {"early": 14.0, "mid": 25.0, "late": 25.0}
+
 
 class PowerSpikeTimingDetector(PatternDetector):
     """
@@ -820,6 +827,50 @@ class PowerSpikeTimingDetector(PatternDetector):
     def __init__(self):
         super().__init__("power_spike_timing", "resource_logic")
 
+    def _game_decided(self, team: str, gold_diff: int, events: List[Dict[str, Any]]) -> bool:
+        """
+        Returns True when the game state is so lopsided that neither 'fight now'
+        nor 'keep farming' is a meaningful strategic choice for the behind team.
+
+        Two conditions trigger this:
+        1. Extreme deficit (>18k gold) — game is essentially over regardless of objectives.
+        2. Mid-range deficit (9k–16k) AND opponent holds Baron AND has cracked the base
+           (destroyed an inhibitor) — the behind team has no viable path.
+
+        The 16k upper bound on condition 2 prevents filtering tasks where the deficit
+        is so large it is already caught by condition 1, avoiding double-counting and
+        keeping the logic orthogonal.
+        """
+        deficit = abs(gold_diff)
+        is_behind = (team == "Blue" and gold_diff < 0) or (team == "Red" and gold_diff > 0)
+
+        if not is_behind:
+            return False
+
+        if deficit > 18000:
+            return True
+
+        if 9000 < deficit <= 16000:
+            opponent_team_id = 200 if team == "Blue" else 100
+            prompted_team_id = 100 if team == "Blue" else 200
+
+            opp_has_baron = any(
+                e.get("monster_type") == "BARON_NASHOR"
+                and e.get("killer_team_id") == opponent_team_id
+                for e in events
+                if e.get("type") == "ELITE_MONSTER_KILL"
+            )
+            opp_destroyed_inhib = any(
+                "INHIBITOR" in e.get("building_type", "")
+                and e.get("team_id") == prompted_team_id
+                for e in events
+                if e.get("type") == "BUILDING_KILL"
+            )
+            if opp_has_baron and opp_destroyed_inhib:
+                return True
+
+        return False
+
     def detect(self, compressed_match: Dict[str, Any]) -> List[Dict[str, Any]]:
         opportunities = []
 
@@ -830,9 +881,22 @@ class PowerSpikeTimingDetector(PatternDetector):
         # Common item breakpoints: ~10k, ~20k, ~30k total team gold
 
         for phase_name, summary in phase_summaries.items():
+            if phase_name not in _PHASE_END_TIMESTAMPS:
+                continue
+
             gold_state = summary.get("gold_state", {})
             blue_gold = gold_state.get("blue_total", 0)
             red_gold = gold_state.get("red_total", 0)
+            actual_gold_diff = gold_state.get("difference", 0)
+
+            # Late-phase gold is never visible (PHASE_COMPLETE_AT["LATE GAME"] = inf).
+            # Use mid-phase gold_diff for the prompt; set team_gold=None so the template
+            # knows not to cite an absolute figure. Use actual diff for game_decided check.
+            if phase_name == "late":
+                mid_gs = phase_summaries.get("mid", {}).get("gold_state", {})
+                prompt_gold_diff = mid_gs.get("difference", actual_gold_diff)
+            else:
+                prompt_gold_diff = actual_gold_diff
 
             # Look for moments where one team hits power spike threshold
             # while ahead or coming online
@@ -842,43 +906,41 @@ class PowerSpikeTimingDetector(PatternDetector):
                 65000,
             ]  # 1-item, 2-item, 3-item spikes
 
+            task_timestamp = _PHASE_END_TIMESTAMPS[phase_name]
+
             for threshold in power_spike_thresholds:
                 # Check if either team just passed threshold
                 if blue_gold >= threshold and blue_gold < threshold + 10000:
-                    # Blue might have power spike
-                    gold_diff = gold_state.get("difference", 0)
-
-                    # Only interesting if game is competitive or they're behind
-                    if abs(gold_diff) < 8000 or gold_diff < 0:
-                        opportunities.append(
-                            {
-                                "pattern_type": "power_spike_timing",
-                                "timestamp": _PHASE_TIMESTAMPS.get(phase_name, 20.0),
-                                "phase": phase_name,
-                                "team": "Blue",
-                                "team_gold": blue_gold,
-                                "gold_diff": gold_diff,
-                                "spike_type": f"{threshold//1000}k_spike",
-                            }
-                        )
+                    # Only interesting if game is competitive or Blue is behind
+                    if abs(actual_gold_diff) < 8000 or actual_gold_diff < 0:
+                        if not self._game_decided("Blue", actual_gold_diff, events):
+                            opportunities.append(
+                                {
+                                    "pattern_type": "power_spike_timing",
+                                    "timestamp": task_timestamp,
+                                    "phase": phase_name,
+                                    "team": "Blue",
+                                    "team_gold": blue_gold if phase_name != "late" else None,
+                                    "gold_diff": prompt_gold_diff,
+                                    "spike_type": f"{threshold//1000}k_spike",
+                                }
+                            )
 
                 if red_gold >= threshold and red_gold < threshold + 10000:
-                    gold_diff = gold_state.get("difference", 0)
-
-                    if (
-                        abs(gold_diff) < 8000 or gold_diff > 0
-                    ):  # Red behind = negative diff
-                        opportunities.append(
-                            {
-                                "pattern_type": "power_spike_timing",
-                                "timestamp": _PHASE_TIMESTAMPS.get(phase_name, 20.0),
-                                "phase": phase_name,
-                                "team": "Red",
-                                "team_gold": red_gold,
-                                "gold_diff": gold_diff,
-                                "spike_type": f"{threshold//1000}k_spike",
-                            }
-                        )
+                    # Only interesting if game is competitive or Red is behind
+                    if abs(actual_gold_diff) < 8000 or actual_gold_diff > 0:
+                        if not self._game_decided("Red", actual_gold_diff, events):
+                            opportunities.append(
+                                {
+                                    "pattern_type": "power_spike_timing",
+                                    "timestamp": task_timestamp,
+                                    "phase": phase_name,
+                                    "team": "Red",
+                                    "team_gold": red_gold if phase_name != "late" else None,
+                                    "gold_diff": prompt_gold_diff,
+                                    "spike_type": f"{threshold//1000}k_spike",
+                                }
+                            )
 
         # Limit to 1-2 most interesting per match
         return opportunities[:2]
@@ -924,7 +986,7 @@ class ScalingDecisionDetector(PatternDetector):
                 opportunities.append(
                     {
                         "pattern_type": "scaling_decision",
-                        "timestamp": 14,  # Early-to-mid transition
+                        "timestamp": 25,  # Mid-game end: both EARLY and MID sections visible
                         "phase": "mid",
                         "team": "Blue",
                         "early_deficit": abs(early_diff),
@@ -940,7 +1002,7 @@ class ScalingDecisionDetector(PatternDetector):
                 opportunities.append(
                     {
                         "pattern_type": "scaling_decision",
-                        "timestamp": 14,
+                        "timestamp": 25,  # Mid-game end: both EARLY and MID sections visible
                         "phase": "mid",
                         "team": "Red",
                         "early_deficit": abs(early_diff),
@@ -1056,7 +1118,7 @@ class OverextensionDetector(PatternDetector):
             if window not in time_windows:
                 time_windows[window] = {"blue_destroyed": [], "red_destroyed": []}
 
-            team_destroyed = building.get("team_id")
+            team_id = building.get("team_id")
             lane = building.get("lane", "NONE")
             building_type = building.get("building_type", "UNKNOWN")
 
@@ -1067,11 +1129,13 @@ class OverextensionDetector(PatternDetector):
                 or "BASE" in building_type
             )
 
-            if team_destroyed == 200:  # Blue's structure destroyed
+            # team_id is the OWNER of the building that was destroyed:
+            # team_id=100 → Blue's building destroyed, team_id=200 → Red's building destroyed
+            if team_id == 100:  # Blue's structure destroyed
                 time_windows[window]["blue_destroyed"].append(
                     {"lane": lane, "type": building_type, "significant": is_significant}
                 )
-            else:  # Red's structure destroyed
+            else:  # Red's structure destroyed (team_id=200)
                 time_windows[window]["red_destroyed"].append(
                     {"lane": lane, "type": building_type, "significant": is_significant}
                 )

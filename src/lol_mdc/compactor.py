@@ -372,6 +372,8 @@ class LoLMatchCompactor:
         lines.append(f"Winner: {winner} Team")
         lines.append("")
 
+        phase_ranges = {"early": "0-14 min", "mid": "14-25 min", "late": "25+ min"}
+
         lines.append("=== PHASE ANALYSIS ===")
         for phase in ["early", "mid", "late"]:
             if phase not in phase_summaries:
@@ -381,7 +383,7 @@ class LoLMatchCompactor:
             gold_state = summary["gold_state"]
             wards = summary.get("ward_activity", {})
 
-            lines.append(f"\n{phase.upper()} GAME:")
+            lines.append(f"\n{phase.upper()} GAME ({phase_ranges[phase]}):")
             lines.append(
                 f"  Gold: Blue {gold_state['blue_total']:,} | "
                 f"Red {gold_state['red_total']:,} | "

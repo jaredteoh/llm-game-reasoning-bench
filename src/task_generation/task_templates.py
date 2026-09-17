@@ -151,10 +151,10 @@ class BaronContestTemplate(TaskTemplate):
             GroundTruthConstraint(
                 constraint_id="risk_reward_analysis",
                 constraint_type="must_mention",
-                description="Must discuss risk when evaluating the Baron attempt",
+                description="Must discuss specific risks when evaluating the Baron attempt",
                 parameters={
-                    "keywords": ["risk", "risky", "dangerous", "danger", "safe", "unsafe", "chance"],
-                    "min_mentions": 1,
+                    "keywords": ["risk", "steal", "contest", "punish", "collapse", "smite"],
+                    "min_mentions": 2,
                 },
             ),
             GroundTruthConstraint(
@@ -162,7 +162,7 @@ class BaronContestTemplate(TaskTemplate):
                 constraint_type="must_mention",
                 description="Must reference gold state when evaluating Baron",
                 parameters={
-                    "keywords": ["gold", "ahead", "behind", "advantage", "disadvantage", "lead"],
+                    "keywords": ["gold", "ahead", "behind", "advantage", "lead"],
                     "min_mentions": 1,
                 },
             ),
@@ -471,7 +471,6 @@ class GoldSwingTemplate(TaskTemplate):
                 description="Must reference specific game events (teamfights, objectives)",
                 parameters={
                     "keywords": [
-                        "teamfight",
                         "fight",
                         "dragon",
                         "baron",
@@ -488,7 +487,6 @@ class GoldSwingTemplate(TaskTemplate):
                 description="Must ground reasoning in specific events from the match timeline",
                 parameters={
                     "keywords": [
-                        "minute",
                         "min",
                         "early game",
                         "mid game",
@@ -630,7 +628,6 @@ class SnowballEffectTemplate(TaskTemplate):
                 description="Must ground reasoning in specific events from the match timeline",
                 parameters={
                     "keywords": [
-                        "minute",
                         "min",
                         "early game",
                         "mid game",
@@ -773,7 +770,6 @@ class ComebackMechanicTemplate(TaskTemplate):
                 description="Must ground reasoning in specific events from the match timeline",
                 parameters={
                     "keywords": [
-                        "minute",
                         "min",
                         "early game",
                         "mid game",
@@ -958,17 +954,20 @@ class BadTeamfightTemplate(TaskTemplate):
             GroundTruthConstraint(
                 constraint_id="acknowledges_mistake",
                 constraint_type="must_mention",
-                description="Must acknowledge this was a strategic error",
+                description="Must acknowledge this was a strategic error using specific error vocabulary",
                 parameters={
                     "keywords": [
                         "mistake",
                         "error",
-                        "should not",
-                        "avoid",
-                        "wrong",
-                        "bad",
+                        "misstep",
+                        "misplay",
+                        "failure",
+                        "incorrect",
+                        "poor decision",
+                        "should not have",
+                        "should have",
                     ],
-                    "min_mentions": 1,
+                    "min_mentions": 2,
                 },
             ),
             GroundTruthConstraint(
@@ -1519,7 +1518,7 @@ class PowerSpikeTemplate(TaskTemplate):
     ) -> ReasoningTask:
 
         team = opportunity["team"]
-        team_gold = opportunity["team_gold"]
+        team_gold = opportunity.get("team_gold")  # None for late-phase tasks
         gold_diff = opportunity["gold_diff"]
         phase = opportunity["phase"]
         spike_type = opportunity["spike_type"]
@@ -1530,13 +1529,25 @@ class PowerSpikeTemplate(TaskTemplate):
             else "behind"
         )
 
-        prompt = (
-            f"{team} team has reached approximately {team_gold:,} total gold "
-            f"(currently {abs(gold_diff):,} gold {gold_state}). "
-            f"Should they force fights/objectives now to capitalize on item power spikes, "
-            f"or continue farming for their next power spike? "
-            f"Explain the resource logic behind your decision."
-        )
+        if team_gold is not None:
+            # Mid/early phase: absolute gold figure is visible in match state
+            prompt = (
+                f"{team} team has reached approximately {team_gold:,} total gold "
+                f"(currently {abs(gold_diff):,} gold {gold_state}). "
+                f"Should they force fights/objectives now to capitalize on item power spikes, "
+                f"or continue farming for their next power spike? "
+                f"Explain the resource logic behind your decision."
+            )
+        else:
+            # Late phase: team gold is not visible in the filtered match state;
+            # reference gold direction only (sourced from mid-phase, which is visible).
+            prompt = (
+                f"It is late game. {team} team is currently {abs(gold_diff):,} gold {gold_state} "
+                f"heading into this phase. "
+                f"Should they force fights/objectives now to capitalize on item power spikes, "
+                f"or continue farming for their next power spike? "
+                f"Explain the resource logic behind your decision."
+            )
 
         reasoning_elements = [
             ReasoningElement(
