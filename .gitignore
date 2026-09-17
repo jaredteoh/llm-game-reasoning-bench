@@ -25,6 +25,7 @@ build/
 *.swp
 *.swo
 .DS_Store
+.claude/
 
 # Testing
 .pytest_cache/
@@ -33,3 +34,9 @@ htmlcov/
 
 # Generated output
 output/
+
+# Personal/working notes and slide decks (not part of the tracked repo)
+docs/
+
+# Capstone report LaTeX source (tracked in Overleaf, not this code repo)
+final_report/
