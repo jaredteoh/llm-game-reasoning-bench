@@ -10,6 +10,9 @@ RIOT_API_KEY = os.getenv("RIOT_API_KEY")
 RIOT_REGION = os.getenv("RIOT_REGION", "americas")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
+HF_TOKEN = os.getenv("HF_TOKEN")
 
 if not RIOT_API_KEY:
     raise ValueError("RIOT_API_KEY environment variable is required")

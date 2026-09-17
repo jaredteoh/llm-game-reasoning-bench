@@ -19,3 +19,7 @@ class LLMInterface(ABC):
     def get_cost_per_token(self) -> Dict[str, float]:
         """Return cost per token for input and output."""
         pass
+
+    def generate_raw(self, prompt: str, max_tokens: int = 1000) -> str:
+        """Send prompt directly to model without any system prompt wrapping. Used for LLM-as-judge."""
+        raise NotImplementedError(f"{self.__class__.__name__} does not support generate_raw")
